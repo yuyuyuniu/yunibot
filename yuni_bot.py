@@ -3,6 +3,7 @@
 Yuni Discord Bot - Thin client that connects to the Yuni Brain API.
 Responds to all messages in configured channels + DMs.
 Sends 3 random messages per day between 9:00-23:00.
+Passes channel_id for 3-message conversation memory.
 """
 
 import os
@@ -28,8 +29,7 @@ ACTIVE_CHANNEL_IDS = {
 RANDOM_MESSAGES_PER_DAY = 3
 QUIET_START_HOUR = 23  # no messages after 23:00
 QUIET_END_HOUR = 9     # no messages before 9:00
-# The bot uses the server's system time. Railway default is UTC.
-# Set TZ=Etc/GMT-3 in Railway env vars if your timezone is UTC+3.
+# Set TZ=Etc/GMT-3 in Railway env vars for UTC+3 timezone.
 
 # ── Discord Client Setup ───────────────────────────────────
 intents = Intents.default()
@@ -37,12 +37,13 @@ intents.message_content = True
 client = discord.Client(intents=intents)
 
 
-async def call_yuni_brain(text: str, image_urls: list[str], username: str) -> str:
+async def call_yuni_brain(text: str, image_urls: list[str], username: str, channel_id: str) -> str:
     """Call the CodeWords Yuni Brain service and return the response."""
     payload = {
         "text": text,
         "images": image_urls,
         "username": username,
+        "channel_id": channel_id,
     }
     headers = {
         "Content-Type": "application/json",
@@ -105,7 +106,6 @@ async def random_message_scheduler():
     print("[SCHEDULER] Random message scheduler started")
 
     while not client.is_closed():
-        # Pick today's random times
         today_times = pick_random_times(RANDOM_MESSAGES_PER_DAY)
         print(f"[SCHEDULER] Today's random message times: {[t.strftime('%H:%M') for t in today_times]}")
 
@@ -113,17 +113,14 @@ async def random_message_scheduler():
             now = datetime.now()
             target = datetime.combine(now.date(), scheduled_time)
 
-            # If time already passed today, skip it
             if target <= now:
                 continue
 
-            # Wait until the scheduled time
             wait_seconds = (target - now).total_seconds()
             print(f"[SCHEDULER] Next random message at {scheduled_time.strftime('%H:%M')} (in {wait_seconds/60:.0f} min)")
 
             await asyncio.sleep(wait_seconds)
 
-            # Send random thought to a random active channel
             thought = await get_random_thought()
             if thought:
                 for channel_id in ACTIVE_CHANNEL_IDS:
@@ -134,9 +131,8 @@ async def random_message_scheduler():
                             print(f"[SCHEDULER] Sent random message to #{channel.name}: {thought[:50]}...")
                         except Exception as e:
                             print(f"[SCHEDULER] Failed to send to #{channel_id}: {e}")
-                        break  # Send to first available channel only
+                        break
 
-        # Sleep until next day at QUIET_END_HOUR
         now = datetime.now()
         tomorrow_start = datetime.combine(
             now.date() + timedelta(days=1), time(QUIET_END_HOUR, 0)
@@ -154,9 +150,9 @@ async def on_ready():
     print(f"  Active channels: {ACTIVE_CHANNEL_IDS}")
     print(f"  DMs: enabled")
     print(f"  Random messages: {RANDOM_MESSAGES_PER_DAY}/day ({QUIET_END_HOUR}:00-{QUIET_START_HOUR}:00)")
+    print(f"  Memory: last 3 exchanges per channel")
     print(f"{'='*50}\n")
 
-    # Start the random message scheduler
     client.loop.create_task(random_message_scheduler())
 
 
@@ -182,11 +178,15 @@ async def on_message(message: discord.Message):
     if not text.strip() and not image_urls:
         return
 
+    # Use channel ID for memory (DMs use author ID)
+    channel_id = str(message.author.id) if is_dm else str(message.channel.id)
+
     async with message.channel.typing():
         reply = await call_yuni_brain(
             text=text,
             image_urls=image_urls,
             username=message.author.display_name,
+            channel_id=channel_id,
         )
 
     if reply:
