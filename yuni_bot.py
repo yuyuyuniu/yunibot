@@ -43,7 +43,7 @@ async def call_yuni_brain(text: str, image_urls: list[str], username: str) -> st
     }
     headers = {
         "Content-Type": "application/json",
-        "x-codewords-api-key": CODEWORDS_API_KEY,
+        "Authorization": f"Bearer {CODEWORDS_API_KEY}",
     }
 
     async with aiohttp.ClientSession() as session:
